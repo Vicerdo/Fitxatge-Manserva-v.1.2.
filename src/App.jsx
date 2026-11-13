@@ -111,7 +111,9 @@ function isHolidayDate(dateStr, festius) {
 
 const isPartit = (w) => !!w && (w.horari === "partit" || (w.horari === undefined && w.id === "tarragona"));
 
-function getStandardSchedule(dateStr, wp) {
+function getStandardSchedule(dateStr, wp, reduced = []) {
+  const rd = reduced.find((r) => r.date === dateStr);
+  if (rd) return { start: rd.start, end: rd.end, split: false, hours: Math.max(0, (timeToMinutes(rd.end) - timeToMinutes(rd.start)) / 60) };
   const d = new Date(dateStr + "T00:00:00");
   const month = d.getMonth() + 1, day = d.getDate(), dow = d.getDay();
   const fri = dow === 5, weekend = dow === 0 || dow === 6;
@@ -155,8 +157,8 @@ function normalizeEntry(e) {
   return { ...rest, tickets, dayType: e.dayType || "", nocturnMode: e.nocturnMode || "auto", ot: e.ot || "" };
 }
 
-function emptyForm(dateStr, festius) {
-  const sc = getStandardSchedule(dateStr, null);
+function emptyForm(dateStr, festius, reduced = []) {
+  const sc = getStandardSchedule(dateStr, null, reduced);
   return {
     id: null, date: dateStr, workplaceId: "", start: sc.start, end: sc.end, splitDay: sc.split,
     festiu: isHolidayDate(dateStr, festius), kmMode: "auto", kmManual: 0, dietMode: "none",
@@ -170,12 +172,14 @@ function resolveDiet(entry, workplace, rawHours) {
   return workplace && workplace.autoDieta && rawHours > 8 ? "mitja" : "none";
 }
 
-function computeEntry(entry, settingsVersions, workplaces, festius, parades = []) {
+function computeEntry(entry, settingsVersions, workplaces, festius, parades = [], reduced = []) {
   const s = getSettingsForDate(entry.date, settingsVersions);
   const workplace = workplaces.find((w) => w.id === entry.workplaceId);
-  const schedule = getStandardSchedule(entry.date, workplace);
+  const schedule = getStandardSchedule(entry.date, workplace, reduced);
   const ticketsAmount = (entry.tickets || []).reduce((a, tk) => a + (Number(tk.amount) || 0), 0);
-  if (entry.dayType) return { totalHours: 0, normalHours: 0, extraHours: 0, extraHoursAmount: 0, standardHours: 0, km: 0, kmAmount: 0, dietResolved: "none", dietAmount: 0, paradaAmount: 0, paradaMode: "none", nightH: 0, nocturnAmount: 0, ticketsAmount, totalExtra: 0, holiday: entry.festiu, workplaceName: workplace ? workplace.name : "—", settingsUsed: s };
+  const dd = (entry.dayType === "descans" || entry.dayType === "baixa") && ["mitja", "completa"].includes(entry.dietMode) ? entry.dietMode : "none";
+  const dAmt = dd === "mitja" ? s.mitjaDieta : dd === "completa" ? s.dietaCompleta : 0;
+  if (entry.dayType) return { totalHours: 0, normalHours: 0, extraHours: 0, extraHoursAmount: 0, standardHours: 0, km: 0, kmAmount: 0, dietResolved: dd, dietAmount: dAmt, paradaAmount: 0, paradaMode: "none", nightH: 0, nocturnAmount: 0, ticketsAmount, totalExtra: dAmt, holiday: entry.festiu, workplaceName: workplace ? workplace.name : "—", settingsUsed: s };
 
   let startMin = timeToMinutes(entry.start);
   let endMin = timeToMinutes(entry.end);
@@ -254,6 +258,12 @@ function monthsBetween(startStr, endStr) {
 
 const STRINGS = {
   ca: {
+    redo_btn: "Tirar endavant",
+    reduced_title: "Jornada reduïda",
+    reduced_note: "Dies de jornada reduïda i les hores que s'haurien de treballar. Surten en taronja al calendari.",
+    legend_reduced: "Jornada reduïda",
+    daytype_counts: "Dies sense treball a l'interval",
+    paid: "Pagada",
     other_place: "Altre",
     legend_festiu: "Festiu",
     daytype_title: "Tipus de dia",
@@ -366,6 +376,12 @@ const STRINGS = {
     nav_fitxatge: "Fitxatge", nav_calendari: "Calendari", nav_resum: "Resum", nav_config: "Configuració",
   },
   es: {
+    redo_btn: "Rehacer",
+    reduced_title: "Jornada reducida",
+    reduced_note: "Días de jornada reducida y las horas que se deberían trabajar. Salen en naranja en el calendario.",
+    legend_reduced: "Jornada reducida",
+    daytype_counts: "Días sin trabajo en el intervalo",
+    paid: "Pagada",
     other_place: "Otro",
     legend_festiu: "Festivo",
     daytype_title: "Tipo de día",
@@ -500,20 +516,24 @@ export default function App() {
   const [importMsg, setImportMsg] = useState("");
   const [undoStack, setUndoStack] = useState([]);
   const [dupConfirm, setDupConfirm] = useState(false);
+  const [reducedDays, setReducedDays] = useState([]);
+  const [reducedForm, setReducedForm] = useState({ date: "", start: "08:00", end: "14:00" });
+  const [redoStack, setRedoStack] = useState([]);
   const prevCfg = useRef(null);
   const lastPush = useRef(0);
   const skipUndo = useRef(false);
 
   useEffect(() => {
     if (loading) return;
-    const cur = JSON.stringify({ settingsVersions, workplaces, parades, festius, ots, retencioPercent, monthlyBaseOverrides });
+    const cur = JSON.stringify({ settingsVersions, workplaces, parades, festius, reducedDays, ots, retencioPercent, monthlyBaseOverrides });
     if (prevCfg.current === null || cur === prevCfg.current) { prevCfg.current = cur; return; }
     if (skipUndo.current) { skipUndo.current = false; prevCfg.current = cur; return; }
     const now = Date.now();
     if (now - lastPush.current > 1500) { const old = JSON.parse(prevCfg.current); setUndoStack((s) => [...s.slice(-9), old]); }
+    setRedoStack([]);
     lastPush.current = now;
     prevCfg.current = cur;
-  }, [settingsVersions, workplaces, parades, festius, ots, retencioPercent, monthlyBaseOverrides, loading]);
+  }, [settingsVersions, workplaces, parades, festius, reducedDays, ots, retencioPercent, monthlyBaseOverrides, loading]);
 
   useEffect(() => {
     if (!loading) { try { window.storage.set("app-undo", JSON.stringify(undoStack), false); } catch (e) { /* ignore */ } }
@@ -546,6 +566,7 @@ export default function App() {
           setFestius(data.festius && data.festius.length ? data.festius : DEFAULT_FESTIUS_2026);
           setEntries((data.entries || []).map(normalizeEntry));
           setOts(data.ots || []);
+          setReducedDays(data.reducedDays || []);
           try { const u = await window.storage.get("app-undo", false); if (u && u.value) setUndoStack(JSON.parse(u.value)); } catch (e) { /* none */ }
           setMonthlyBaseOverrides(data.monthlyBaseOverrides || {});
           setLang(data.lang === "es" ? "es" : "ca");
@@ -570,6 +591,7 @@ export default function App() {
       lang: next.lang ?? lang,
       parades: next.parades ?? parades,
       ots: next.ots ?? ots,
+      reducedDays: next.reducedDays ?? reducedDays,
     };
     try {
       const result = await window.storage.set(STORAGE_KEY, JSON.stringify(payload), false);
@@ -580,12 +602,12 @@ export default function App() {
   }
 
   function handleDateChange(dateStr) {
-    const sc = getStandardSchedule(dateStr, workplaces.find((w) => w.id === form.workplaceId));
+    const sc = getStandardSchedule(dateStr, workplaces.find((w) => w.id === form.workplaceId), reducedDays);
     setForm((f) => ({ ...f, date: dateStr, festiu: isHolidayDate(dateStr, festius), ...(f.id || f.timesTouched ? {} : { start: sc.start, end: sc.end, splitDay: sc.split }) }));
   }
 
   function handleWorkplaceChange(id) {
-    const sc = getStandardSchedule(form.date, workplaces.find((w) => w.id === id));
+    const sc = getStandardSchedule(form.date, workplaces.find((w) => w.id === id), reducedDays);
     setForm((f) => ({ ...f, workplaceId: id, kmMode: "auto", ...(f.id || f.timesTouched ? {} : { start: sc.start, end: sc.end, splitDay: sc.split }) }));
   }
 
@@ -600,7 +622,7 @@ export default function App() {
       if (f.dietMode === want && (!autoOn || f.splitDay)) return f;
       return { ...f, dietMode: want, ...(autoOn ? { splitDay: true } : {}) };
     });
-  }, [form.workplaceId, form.start, form.end, workplaces]);
+  }, [form.workplaceId, form.start, form.end, form.dayType, workplaces]);
 
   useEffect(() => {
     setForm((f) => {
@@ -608,7 +630,15 @@ export default function App() {
       const m = resolveParada({ ...f, parada: "auto" }, parades);
       return f.parada === m ? f : { ...f, parada: m };
     });
-  }, [form.workplaceId, form.date, form.festiu, parades]);
+  }, [form.workplaceId, form.date, form.festiu, form.dayType, parades]);
+
+  const initWp = useRef(false);
+  useEffect(() => {
+    if (loading || initWp.current) return;
+    initWp.current = true;
+    const last = [...entries].filter((e) => e.workplaceId).sort((a, b) => b.date.localeCompare(a.date))[0];
+    if (last) handleWorkplaceChange(last.workplaceId);
+  }, [loading]);
 
   const setTicket = (i, k, v) => setForm((f) => ({ ...f, tickets: f.tickets.map((tk, j) => (j === i ? { ...tk, [k]: v } : tk)) }));
   const addTicket = () => setForm((f) => ({ ...f, tickets: [...f.tickets, { concept: "", amount: "", desc: "" }] }));
@@ -623,8 +653,11 @@ export default function App() {
     setTab("fitxatge");
   }
 
-  function resetForm() {
-    setForm(emptyForm(form.date || todayStr(), festius));
+  function resetForm(wpId) {
+    const date = form.date || todayStr();
+    const wId = typeof wpId === "string" ? wpId : form.workplaceId;
+    const sc = getStandardSchedule(date, workplaces.find((w) => w.id === wId), reducedDays);
+    setForm({ ...emptyForm(date, festius, reducedDays), workplaceId: wId, start: sc.start, end: sc.end, splitDay: sc.split });
   }
 
 
@@ -639,14 +672,55 @@ export default function App() {
     resetForm();
   }
 
+  const cfgNow = () => ({ settingsVersions, workplaces, parades, festius, reducedDays, ots, retencioPercent, monthlyBaseOverrides });
+
+  async function applyCfg(s) {
+    skipUndo.current = true;
+    setSettingsVersions(s.settingsVersions); setWorkplaces(s.workplaces); setParades(s.parades); setFestius(s.festius);
+    setReducedDays(s.reducedDays || []); setOts(s.ots); setRetencioPercent(s.retencioPercent); setMonthlyBaseOverrides(s.monthlyBaseOverrides);
+    await persist({ ...s, reducedDays: s.reducedDays || [] });
+  }
+
   async function undoConfig() {
     if (!undoStack.length) return;
     const s = undoStack[undoStack.length - 1];
-    skipUndo.current = true;
-    setSettingsVersions(s.settingsVersions); setWorkplaces(s.workplaces); setParades(s.parades); setFestius(s.festius);
-    setOts(s.ots); setRetencioPercent(s.retencioPercent); setMonthlyBaseOverrides(s.monthlyBaseOverrides);
+    setRedoStack((r) => [...r, cfgNow()]);
     setUndoStack(undoStack.slice(0, -1));
-    await persist({ ...s });
+    await applyCfg(s);
+  }
+
+  async function redoConfig() {
+    if (!redoStack.length) return;
+    const s = redoStack[redoStack.length - 1];
+    setUndoStack((u) => [...u, cfgNow()]);
+    setRedoStack(redoStack.slice(0, -1));
+    await applyCfg(s);
+  }
+
+  async function updateParada(id, k, v) {
+    const next = parades.map((p) => (p.id === id ? { ...p, [k]: v } : p));
+    setParades(next);
+    await persist({ parades: next });
+  }
+
+  async function addReduced() {
+    if (!reducedForm.date || reducedForm.start >= reducedForm.end) return;
+    const next = [...reducedDays.filter((r) => r.date !== reducedForm.date), { id: Date.now().toString(), ...reducedForm }].sort((a, b) => a.date.localeCompare(b.date));
+    setReducedDays(next);
+    await persist({ reducedDays: next });
+    setReducedForm((f) => ({ ...f, date: "" }));
+  }
+
+  async function deleteReduced(id) {
+    const next = reducedDays.filter((r) => r.id !== id);
+    setReducedDays(next);
+    await persist({ reducedDays: next });
+  }
+
+  async function toggleTicketPaid(entryId, idx) {
+    const next = entries.map((e) => (e.id === entryId ? { ...e, tickets: e.tickets.map((tk, i) => (i === idx ? { ...tk, paid: !tk.paid } : tk)) } : e));
+    setEntries(next);
+    await persist({ entries: next });
   }
 
   async function addOT() {
@@ -763,7 +837,7 @@ export default function App() {
     const mEntries = entries.filter((e) => e.date.startsWith(monthStr));
     let normalHours = 0, extraHours = 0, extraHoursAmount = 0, kmTotal = 0, kmAmount = 0, dietAmount = 0, paradaAmount = 0, nocturnAmount = 0, nocturnHours = 0, ticketsAmount = 0;
     mEntries.forEach((e) => {
-      const c = computeEntry(e, settingsVersions, workplaces, festius, parades);
+      const c = computeEntry(e, settingsVersions, workplaces, festius, parades, reducedDays);
       normalHours += c.normalHours;
       extraHours += c.extraHours;
       extraHoursAmount += c.extraHoursAmount;
@@ -788,7 +862,7 @@ export default function App() {
     let mitjaCount = 0, mitjaAmount = 0, completaCount = 0, completaAmount = 0;
     let paradaNormalCount = 0, paradaNormalAmount = 0, paradaFestiuCount = 0, paradaFestiuAmount = 0;
     rEntries.forEach((e) => {
-      const c = computeEntry(e, settingsVersions, workplaces, festius, parades);
+      const c = computeEntry(e, settingsVersions, workplaces, festius, parades, reducedDays);
       normalHours += c.normalHours;
       extraHours += c.extraHours;
       extraHoursAmount += c.extraHoursAmount;
@@ -825,9 +899,9 @@ export default function App() {
     };
   }
 
-  const rangeSummary = useMemo(() => summarizeRange(rangeStart, rangeEnd), [entries, settingsVersions, workplaces, festius, parades, monthlyBaseOverrides, retencioPercent, rangeStart, rangeEnd]);
+  const rangeSummary = useMemo(() => summarizeRange(rangeStart, rangeEnd), [entries, settingsVersions, workplaces, festius, parades, reducedDays, monthlyBaseOverrides, retencioPercent, rangeStart, rangeEnd]);
 
-  const monthSummary = useMemo(() => summarizeMonth(month), [entries, settingsVersions, workplaces, festius, parades, monthlyBaseOverrides, retencioPercent, month]);
+  const monthSummary = useMemo(() => summarizeMonth(month), [entries, settingsVersions, workplaces, festius, parades, reducedDays, monthlyBaseOverrides, retencioPercent, month]);
 
 
 
@@ -852,7 +926,7 @@ export default function App() {
     const projectedBrut = projectedBaseFullYear + projectedExtraFullYear;
     const projectedNet = projectedBrut * (1 - retencioPercent / 100);
     return { totalBrut, totalNet, totalExtra, totalBase, year, throughMonth: currentMonthNum, projectedBrut, projectedNet };
-  }, [entries, settingsVersions, workplaces, festius, parades, monthlyBaseOverrides, retencioPercent, month]);
+  }, [entries, settingsVersions, workplaces, festius, parades, reducedDays, monthlyBaseOverrides, retencioPercent, month]);
 
   const monthEntries = useMemo(
     () => entries.filter((e) => e.date.startsWith(month)).sort((a, b) => a.date.localeCompare(b.date)),
@@ -894,39 +968,58 @@ export default function App() {
 
   async function exportExcel() {
     if (!rangeSummary) { setExportMsg(tr("invalid_range")); return; }
-    const rows = entries.filter((e) => e.date >= rangeStart && e.date <= rangeEnd).sort((a, b) => a.date.localeCompare(b.date));
-    if (!rows.length) { setExportMsg(tr("no_entries_range")); return; }
+    const inRange = entries.filter((e) => e.date >= rangeStart && e.date <= rangeEnd);
+    if (!inRange.length) { setExportMsg(tr("no_entries_range")); return; }
     const ExcelJS = await loadExcelJS();
     if (!ExcelJS) { setExportMsg("Excel: només disponible a la versió de Netlify."); return; }
     setExportMsg("");
+    const es = lang === "es";
+    const pad = (n) => String(n).padStart(2, "0");
+    const days = [];
+    const cur = new Date(rangeStart + "T00:00:00");
+    for (let i = 0; i < 800; i++) {
+      const ds = `${cur.getFullYear()}-${pad(cur.getMonth() + 1)}-${pad(cur.getDate())}`;
+      if (ds > rangeEnd) break;
+      days.push(ds);
+      cur.setDate(cur.getDate() + 1);
+    }
     const wb = new ExcelJS.Workbook();
-    const ws = wb.addWorksheet("Fitxatges");
-    const heads = ["Data", "Hores", "Hores extra", "Ubicació", "Km", "Dieta", "Plus", "Turno nit", "OT", "Descripció"];
-    ws.columns = heads.map((h, i) => ({ header: h, key: "c" + i, width: [12, 9, 11, 18, 8, 11, 11, 11, 14, 44][i] }));
+    const ws = wb.addWorksheet(es ? "Fichajes" : "Fitxatges");
+    const heads = es ? ["Fecha", "Horas", "Horas extra", "Ubicación", "Km", "Dieta", "Plus", "Horas nocturnas", "OT", "Descripción"] : ["Data", "Hores", "Hores extra", "Ubicació", "Km", "Dieta", "Plus", "Hores nocturnes", "OT", "Descripció"];
+    ws.columns = heads.map((h, i) => ({ header: h, key: "c" + i, width: [12, 9, 11, 18, 8, 11, 11, 15, 14, 44][i] }));
     const thin = { style: "thin", color: { argb: "FFD1D5DB" } };
     const border = { top: thin, left: thin, bottom: thin, right: thin };
-    rows.forEach((e) => {
-      const c = computeEntry(e, settingsVersions, workplaces, festius, parades);
-      const [y, m, d] = e.date.split("-").map(Number);
-      ws.addRow([new Date(Date.UTC(y, m - 1, d)), e.dayType ? "" : Number(c.normalHours.toFixed(2)), e.dayType ? "" : Number(c.extraHours.toFixed(2)), e.dayType ? tr("daytype_" + e.dayType) : c.workplaceName, c.km, c.dietAmount, c.paradaAmount, Number(c.nightH.toFixed(2)), e.ot || "", e.notes || ""]);
+    const holRows = new Set();
+    days.forEach((ds) => {
+      const [y, m, d] = ds.split("-").map(Number);
+      const list = inRange.filter((e) => e.date === ds);
+      const hol = isHolidayDate(ds, festius) || list.some((e) => e.festiu);
+      const dateCell = new Date(Date.UTC(y, m - 1, d));
+      if (!list.length) { const r = ws.addRow([dateCell]); if (hol) holRows.add(r.number); return; }
+      list.forEach((e) => {
+        const c = computeEntry(e, settingsVersions, workplaces, festius, parades, reducedDays);
+        const r = ws.addRow([dateCell, e.dayType ? "" : Number(c.normalHours.toFixed(2)), e.dayType ? "" : Number(c.extraHours.toFixed(2)), e.dayType ? tr("daytype_" + e.dayType) : c.workplaceName, c.km, c.dietAmount, c.paradaAmount, Number(c.nightH.toFixed(2)), e.ot || "", e.notes || ""]);
+        if (hol) holRows.add(r.number);
+      });
     });
-    const last = rows.length + 1;
+    const last = ws.rowCount;
     const tot = ws.addRow(["Total"]);
     Object.entries({ B: 2, C: 3, E: 5, F: 6, G: 7, H: 8 }).forEach(([col, idx]) => {
-      const v = rows.reduce((s, _, i) => s + (Number(ws.getRow(i + 2).getCell(idx).value) || 0), 0);
+      let v = 0;
+      for (let r = 2; r <= last; r++) v += Number(ws.getRow(r).getCell(idx).value) || 0;
       tot.getCell(idx).value = { formula: `SUBTOTAL(109,${col}2:${col}${last})`, result: Number(v.toFixed(2)) };
     });
     ws.eachRow((row, rn) => row.eachCell({ includeEmpty: true }, (cell, cn) => {
       cell.border = border;
       if (rn === 1) { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFBE0936" } }; cell.font = { bold: true, color: { argb: "FFFFFFFF" } }; cell.alignment = { horizontal: "center" }; }
       else if (rn === last + 1) { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2937" } }; cell.font = { bold: true, color: { argb: "FFFFFFFF" } }; }
-      else cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rn % 2 ? "FFFBE9ED" : "FFFFFFFF" } };
+      else cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: holRows.has(rn) ? "FFFFE0C2" : rn % 2 ? "FFFBE9ED" : "FFFFFFFF" } };
       if (rn > 1 && cn === 1 && rn <= last) cell.numFmt = "dd/mm/yyyy";
       if (rn > 1 && [6, 7].includes(cn)) cell.numFmt = '#,##0.00 "€"';
     }));
     ws.views = [{ state: "frozen", ySplit: 1 }];
     ws.autoFilter = { from: "A1", to: `J${last}` };
-    download(await wb.xlsx.writeBuffer(), `fitxatges-${rangeStart}_${rangeEnd}.xlsx`);
+    download(await wb.xlsx.writeBuffer(), `${es ? "fichajes" : "fitxatges"}-${rangeStart}_${rangeEnd}.xlsx`);
   }
 
   async function exportBackup() {
@@ -938,17 +1031,18 @@ export default function App() {
       ws.addRow(keys);
       rows.forEach((r) => ws.addRow(keys.map((k) => (r[k] === undefined || r[k] === null ? "" : r[k]))));
       ws.getRow(1).font = { bold: true };
-      ws.columns.forEach((c) => { c.width = 16; });
+      keys.forEach((_, i) => { ws.getColumn(i + 1).width = 16; });
     };
     sheet("Fitxatges", ["id", "date", "workplaceId", "start", "end", "splitDay", "festiu", "kmMode", "kmManual", "dietMode", "parada", "nocturnMode", "ot", "notes", "dayType"], entries);
-    sheet("Tiquets", ["entryId", "date", "concept", "amount", "desc"], entries.flatMap((e) => (e.tickets || []).map((tk) => ({ entryId: e.id, date: e.date, ...tk }))));
+    sheet("Tiquets", ["entryId", "date", "concept", "amount", "desc", "paid"], entries.flatMap((e) => (e.tickets || []).map((tk) => ({ entryId: e.id, date: e.date, ...tk }))));
     sheet("OT", ["name"], ots.map((name) => ({ name })));
     sheet("Preus", ["id", "effectiveFrom", "souBase", "preuHoraExtra", "preuKm", "mitjaDieta", "dietaCompleta", "plusParadaNormal", "plusParadaFestiu", "plusNocturnitat"], settingsVersions);
     sheet("Llocs", ["id", "name", "km", "autoDieta", "horari"], workplaces.map((w) => ({ ...w, horari: isPartit(w) ? "partit" : "normal" })));
+    sheet("Reduides", ["id", "date", "start", "end"], reducedDays);
     sheet("Parades", ["id", "workplaceId", "start", "end"], parades);
     sheet("Festius", ["date"], festius.map((d) => ({ date: d })));
     sheet("SouMensual", ["month", "souBase"], Object.entries(monthlyBaseOverrides).map(([month, souBase]) => ({ month, souBase })));
-    sheet("Config", ["key", "value"], [{ key: "appVersion", value: "1.2" }, { key: "exportedAt", value: todayStr() }, { key: "retencioPercent", value: retencioPercent }, { key: "lang", value: lang }]);
+    sheet("Config", ["key", "value"], [{ key: "appVersion", value: "1.3" }, { key: "exportedAt", value: todayStr() }, { key: "retencioPercent", value: retencioPercent }, { key: "lang", value: lang }]);
     download(await wb.xlsx.writeBuffer(), `fitxatge-copia-completa-${todayStr()}.xlsx`);
   }
 
@@ -1001,12 +1095,14 @@ export default function App() {
         if (!pd.some((x) => x.workplaceId === wid && x.start === start && x.end === end)) pd.push({ id: String(p.id || Date.now() + Math.random()), workplaceId: wid, start, end });
       });
       const fs = [...new Set([...festius, ...read("Festius").map((r) => iso(r.date)).filter((d) => d.length === 10)])].sort();
+      const rdl = [...reducedDays];
+      read("Reduides").forEach((r) => { const d = iso(r.date); if (d.length === 10 && !rdl.some((x) => x.date === d)) rdl.push({ id: String(r.id || Date.now() + Math.random()), date: d, start: tm(r.start) || "08:00", end: tm(r.end) || "14:00" }); });
       const mo = { ...monthlyBaseOverrides };
       read("SouMensual").forEach((r) => { if (r.month && mo[r.month] === undefined) mo[r.month] = num(r.souBase); });
       const cfgRet = read("Config").find((r) => r.key === "retencioPercent");
       const ret = cfgRet && retencioPercent === 15 && cfgRet.value !== "" ? num(cfgRet.value) : retencioPercent;
       const ticketsById = {};
-      read("Tiquets").forEach((r) => { (ticketsById[String(r.entryId)] = ticketsById[String(r.entryId)] || []).push({ concept: String(r.concept || ""), amount: r.amount === "" ? "" : num(r.amount), desc: String(r.desc || "") }); });
+      read("Tiquets").forEach((r) => { (ticketsById[String(r.entryId)] = ticketsById[String(r.entryId)] || []).push({ concept: String(r.concept || ""), amount: r.amount === "" ? "" : num(r.amount), desc: String(r.desc || ""), paid: bool(r.paid) }); });
       const have = new Set(entries.map((e) => e.date));
       let added = 0, skipped = 0;
       const fresh = [];
@@ -1032,8 +1128,8 @@ export default function App() {
       });
       const allEntries = [...entries, ...fresh].sort((a, b) => a.date.localeCompare(b.date));
       const otList = [...new Set([...ots, ...read("OT").map((r) => String(r.name)).filter(Boolean), ...fresh.map((e) => e.ot).filter(Boolean)])];
-      setEntries(allEntries); setWorkplaces(wps); setSettingsVersions(sv); setParades(pd); setFestius(fs); setMonthlyBaseOverrides(mo); setOts(otList); setRetencioPercent(ret);
-      await persist({ entries: allEntries, workplaces: wps, settingsVersions: sv, parades: pd, festius: fs, monthlyBaseOverrides: mo, ots: otList, retencioPercent: ret });
+      setEntries(allEntries); setWorkplaces(wps); setSettingsVersions(sv); setParades(pd); setFestius(fs); setMonthlyBaseOverrides(mo); setOts(otList); setRetencioPercent(ret); setReducedDays(rdl);
+      await persist({ entries: allEntries, workplaces: wps, settingsVersions: sv, parades: pd, festius: fs, monthlyBaseOverrides: mo, ots: otList, retencioPercent: ret, reducedDays: rdl });
       setImportMsg(tr("import_ok", added, skipped));
     } catch (err) {
       setImportMsg(tr("import_err"));
@@ -1052,9 +1148,10 @@ export default function App() {
   const kmValue = form.kmMode === "manual" ? form.kmManual : selWp ? selWp.km : 0;
   const formNight = nightHours(form.start, form.end);
   const formParada = resolveParada(form, parades);
-  const rangeTickets = rangeSummary ? entries.filter((e) => e.date >= rangeStart && e.date <= rangeEnd).flatMap((e) => (e.tickets || []).map((tk) => ({ date: e.date, ...tk }))) : [];
+  const rangeTickets = rangeSummary ? entries.filter((e) => e.date >= rangeStart && e.date <= rangeEnd).flatMap((e) => (e.tickets || []).map((tk, idx) => ({ date: e.date, entryId: e.id, idx, ...tk }))) : [];
+  const rangeDayTypes = ["descans", "vacances", "baixa", "personal", "altres"].map((k) => ({ k, n: rangeSummary ? entries.filter((e) => e.date >= rangeStart && e.date <= rangeEnd && e.dayType === k).length : 0 }));
   const selectedEntry = selectedDay ? entries.find((e) => e.date === selectedDay) : null;
-  const selectedComputed = selectedEntry ? computeEntry(selectedEntry, settingsVersions, workplaces, festius, parades) : null;
+  const selectedComputed = selectedEntry ? computeEntry(selectedEntry, settingsVersions, workplaces, festius, parades, reducedDays) : null;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -1119,7 +1216,7 @@ export default function App() {
                 </label>
               </div>
               <p className="text-xs text-slate-500 mb-3">
-                {(() => { const sc = getStandardSchedule(form.date, selWp); return tr("schedule_note", sc.start, sc.end, sc.hours); })()}
+                {(() => { const sc = getStandardSchedule(form.date, selWp, reducedDays); return tr("schedule_note", sc.start, sc.end, sc.hours); })()}
               </p>
 
 
@@ -1262,7 +1359,7 @@ export default function App() {
                 <label className={`${labelCls} mb-1 block`}>{tr("daytype_title")}</label>
                 <div className="flex flex-wrap gap-2">
                   {["", "descans", "vacances", "baixa", "personal", "altres"].map((k) => (
-                    <button key={k || "work"} type="button" onClick={() => setForm((f) => ({ ...f, dayType: k }))} className={`flex-1 min-w-[30%] rounded-lg py-1.5 text-xs font-medium border ${form.dayType === k ? "bg-[#be0936] border-[#be0936] text-white" : "bg-slate-800 border-slate-700 text-slate-300"}`}>
+                    <button key={k || "work"} type="button" onClick={() => setForm((f) => ({ ...f, dayType: k, ...(k ? { dietMode: "none", dietTouched: true } : { dietTouched: false }) }))} className={`flex-1 min-w-[30%] rounded-lg py-1.5 text-xs font-medium border ${form.dayType === k ? "bg-[#be0936] border-[#be0936] text-white" : "bg-slate-800 border-slate-700 text-slate-300"}`}>
                       {k ? tr("daytype_" + k) : tr("daytype_work")}
                     </button>
                   ))}
@@ -1285,7 +1382,7 @@ export default function App() {
                   {form.id ? tr("btn_update") : tr("btn_add_entry")}
                 </button>
                 {form.id && (
-                  <button onClick={resetForm} className="px-3 bg-slate-800 text-slate-300 rounded-lg text-sm flex items-center gap-1">
+                  <button onClick={() => resetForm()} className="px-3 bg-slate-800 text-slate-300 rounded-lg text-sm flex items-center gap-1">
                     <X className="w-4 h-4" /> {tr("btn_cancel")}
                   </button>
                 )}
@@ -1296,7 +1393,7 @@ export default function App() {
               <h3 className="text-sm font-semibold text-slate-500 mb-2 px-1">{tr("recent_entries")}</h3>
               <div className="space-y-2">
                 {entries.slice().reverse().slice(0, 15).map((e) => {
-                  const c = computeEntry(e, settingsVersions, workplaces, festius, parades);
+                  const c = computeEntry(e, settingsVersions, workplaces, festius, parades, reducedDays);
                   return (
                     <div key={e.id} className="bg-slate-900 rounded-lg border border-slate-800 p-3 flex items-start justify-between gap-2">
                       <div className="text-sm">
@@ -1344,9 +1441,10 @@ export default function App() {
                 {calendarCells.map((dateStr, i) => {
                   if (!dateStr) return <div key={i} />;
                   const entry = entries.find((e) => e.date === dateStr);
-                  const c = entry ? computeEntry(entry, settingsVersions, workplaces, festius, parades) : null;
+                  const c = entry ? computeEntry(entry, settingsVersions, workplaces, festius, parades, reducedDays) : null;
                   const holiday = isHolidayDate(dateStr, festius);
                   const inParada = parades.some((p) => p.start <= dateStr && dateStr <= p.end);
+                  const isReduced = reducedDays.some((r) => r.date === dateStr);
                   const day = Number(dateStr.slice(8, 10));
                   const isSelected = selectedDay === dateStr;
                   return (
@@ -1354,7 +1452,7 @@ export default function App() {
                       key={dateStr}
                       onClick={() => setSelectedDay(dateStr)}
                       className={`aspect-square rounded-lg text-xs flex flex-col items-center justify-center gap-0.5 border ${
-                        isSelected ? "border-[#be0936] bg-[#3a0416]" : inParada ? (holiday ? "border-purple-800 bg-purple-950/50" : "border-emerald-900 bg-emerald-950/30") : holiday ? "border-orange-900 bg-orange-950/30" : entry ? "border-slate-700 bg-slate-800" : "border-slate-800 bg-slate-900"
+                        isSelected ? "border-[#be0936] bg-[#3a0416]" : inParada ? (holiday ? "border-purple-800 bg-purple-950/50" : "border-emerald-900 bg-emerald-950/30") : holiday ? "border-orange-900 bg-orange-950/30" : isReduced ? "border-orange-500 bg-orange-600/25" : entry ? "border-slate-700 bg-slate-800" : "border-slate-800 bg-slate-900"
                       }`}
                     >
                       <span className={holiday ? "text-orange-300" : "text-slate-200"}>{day}</span>
@@ -1369,8 +1467,9 @@ export default function App() {
                   );
                 })}
               </div>
-              <div className="flex gap-3 mt-3 text-xs text-slate-500">
+              <div className="flex flex-wrap gap-x-3 gap-y-1 mt-3 text-xs text-slate-500">
                 <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-950/60 border border-orange-900 inline-block" /> {tr("legend_festiu")}</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-500 inline-block" /> {tr("legend_reduced")}</span>
                 <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-950 border border-emerald-800 inline-block" /> {tr("legend_parada")}</span>
                 <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-purple-950 border border-purple-800 inline-block" /> {tr("legend_parada_festiu")}</span>
                 <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-400 inline-block" /> {tr("legend_base")}</span>
@@ -1408,7 +1507,7 @@ export default function App() {
                   <div className="text-sm text-slate-500">
                     {tr("no_entry_day")}
                     <button
-                      onClick={() => { setForm(emptyForm(selectedDay, festius)); setTab("fitxatge"); }}
+                      onClick={() => { setForm(emptyForm(selectedDay, festius, reducedDays)); setTab("fitxatge"); }}
                       className="mt-2 w-full bg-[#be0936] text-white rounded-lg py-1.5 text-xs flex items-center justify-center gap-1"
                     >
                       <Plus className="w-3.5 h-3.5" /> {tr("btn_add_for_day")}
@@ -1565,6 +1664,18 @@ export default function App() {
                     </div>
                                        </div>
 
+                  <div>
+                    <div className="text-xs text-slate-500 mb-1">{tr("daytype_counts")}</div>
+                    <div className="grid grid-cols-5 gap-1.5">
+                      {rangeDayTypes.map((x) => (
+                        <div key={x.k} className="bg-slate-800 rounded-lg py-1.5 text-center">
+                          <div className="text-[10px] text-amber-300">{tr("ab_" + x.k)}</div>
+                          <div className="text-sm font-semibold text-slate-100">{x.n}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
                   <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
                     <div>
                       <div className="text-xs text-slate-500">{tr("total_gross_range")}</div>
@@ -1588,7 +1699,7 @@ export default function App() {
                 {rangeTickets.length === 0 ? <p className="text-xs text-slate-500">{tr("no_tickets")}</p> : rangeTickets.map((tk, i) => (
                   <div key={i} className="bg-slate-800 rounded-lg px-3 py-2 text-xs text-slate-300 flex justify-between gap-2">
                     <span>{tk.date} · {tk.concept}{tk.desc ? ` — ${tk.desc}` : ""}</span>
-                    <span className="text-slate-100 shrink-0">{fmt(Number(tk.amount) || 0)} €</span>
+                    <label className="flex items-center gap-1 shrink-0 text-slate-100">{fmt(Number(tk.amount) || 0)} €<input type="checkbox" checked={!!tk.paid} onChange={() => toggleTicketPaid(tk.entryId, tk.idx)} className="rounded ml-2" /><span className="text-[11px] text-slate-400">{tr("paid")}</span></label>
                   </div>
                 ))}
               </div>
@@ -1600,23 +1711,12 @@ export default function App() {
               {tr("export_button")}
             </button>
             <p className="text-xs text-slate-500 text-center px-4">{exportMsg || tr("export_note")}</p>
-            <button onClick={exportBackup} className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg py-2.5 text-sm font-medium flex items-center justify-center gap-2">
-              <Download className="w-4 h-4" />
-              {tr("backup_button")}
-            </button>
-            <p className="text-xs text-slate-500 text-center px-4">{tr("backup_note")}</p>
-            <label className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg py-2.5 text-sm font-medium flex items-center justify-center gap-2 cursor-pointer">
-              <Upload className="w-4 h-4" />
-              {tr("import_button")}
-              <input type="file" accept=".xlsx" className="hidden" onChange={(e) => { importBackup(e.target.files[0]); e.target.value = ""; }} />
-            </label>
-            <p className="text-xs text-slate-500 text-center px-4">{importMsg || tr("import_note")}</p>
 
             <div>
               <h3 className="text-sm font-semibold text-slate-500 mb-2 px-1">{tr("month_entries_title", monthLabel(month, lang))}</h3>
               <div className="space-y-1.5">
                 {monthEntries.map((e) => {
-                  const c = computeEntry(e, settingsVersions, workplaces, festius, parades);
+                  const c = computeEntry(e, settingsVersions, workplaces, festius, parades, reducedDays);
                   return (
                     <div key={e.id} className="flex items-center justify-between bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs">
                       <span className="text-slate-300">{e.date} · {c.workplaceName} · {fmt(c.totalHours)}h</span>
@@ -1636,7 +1736,6 @@ export default function App() {
               <h2 className="font-semibold text-slate-100 mb-1 flex items-center gap-2">
                 <ListChecks className="w-4 h-4 text-[#e21a4c]" /> {tr("ot_title")}
               </h2>
-              <p className="text-xs text-slate-500 mb-3">{tr("ot_note")}</p>
               <div className="flex gap-2 mb-2">
                 <input value={otInput} onChange={(e) => setOtInput(e.target.value)} placeholder={tr("ot_placeholder")} className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-slate-100" />
                 <button onClick={addOT} className="bg-[#be0936] text-white rounded-lg px-3"><Plus className="w-4 h-4" /></button>
@@ -1650,10 +1749,6 @@ export default function App() {
                 ))}
               </div>
             </section>
-
-            <button onClick={undoConfig} disabled={!undoStack.length} className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg py-2 text-sm flex items-center justify-center gap-2 disabled:opacity-40">
-              <RotateCcw className="w-4 h-4" /> {tr("undo_btn")} ({undoStack.length})
-            </button>
 
             <section className={cardCls}>
               <h2 className="font-semibold text-slate-100 mb-1 flex items-center gap-2">
@@ -1770,9 +1865,15 @@ export default function App() {
               <button onClick={addParada} className="w-full bg-[#be0936] text-white rounded-lg py-1.5 text-sm flex items-center justify-center gap-1 mb-3"><Plus className="w-4 h-4" /> {tr("add_parada")}</button>
               <div className="space-y-1.5">
                 {parades.map((p) => (
-                  <div key={p.id} className="flex items-center justify-between bg-emerald-950/30 border border-emerald-900 rounded-lg px-3 py-2 text-sm">
-                    <span className="text-slate-200">{workplaces.find((w) => w.id === p.workplaceId)?.name || "—"} · {p.start} → {p.end}</span>
-                    <button onClick={() => deleteParada(p.id)} className="text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
+                  <div key={p.id} className="bg-emerald-950/30 border border-emerald-900 rounded-lg px-3 py-2 text-sm">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-slate-200">{workplaces.find((w) => w.id === p.workplaceId)?.name || "—"}</span>
+                      <button onClick={() => deleteParada(p.id)} className="text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="date" value={p.start} onChange={(e) => updateParada(p.id, "start", e.target.value)} className={`${inputCls} !mt-0`} />
+                      <input type="date" value={p.end} onChange={(e) => updateParada(p.id, "end", e.target.value)} className={`${inputCls} !mt-0`} />
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1797,6 +1898,40 @@ export default function App() {
               </div>
             </section>
             <section className={cardCls}>
+              <h2 className="font-semibold text-slate-100 mb-1 flex items-center gap-2">
+                <CalendarDays className="w-4 h-4 text-orange-400" /> {tr("reduced_title")}
+              </h2>
+              <p className="text-xs text-slate-500 mb-3">{tr("reduced_note")}</p>
+              <div className="grid grid-cols-3 gap-2 mb-2">
+                <input type="date" value={reducedForm.date} onChange={(e) => setReducedForm((f) => ({ ...f, date: e.target.value }))} className={`${inputCls} col-span-3 !mt-0`} />
+                <select value={reducedForm.start} onChange={(e) => setReducedForm((f) => ({ ...f, start: e.target.value }))} className={`${inputCls} !mt-0`}>
+                  {TIME_OPTIONS.map((x) => <option key={x} value={x}>{x}</option>)}
+                </select>
+                <select value={reducedForm.end} onChange={(e) => setReducedForm((f) => ({ ...f, end: e.target.value }))} className={`${inputCls} !mt-0`}>
+                  {TIME_OPTIONS.map((x) => <option key={x} value={x}>{x}</option>)}
+                </select>
+                <button onClick={addReduced} className="bg-[#be0936] text-white rounded-lg flex items-center justify-center"><Plus className="w-4 h-4" /></button>
+              </div>
+              <div className="space-y-1.5">
+                {reducedDays.map((r) => (
+                  <div key={r.id} className="flex items-center justify-between bg-orange-600/15 border border-orange-500/60 rounded-lg px-3 py-2 text-sm">
+                    <span className="text-slate-200">{r.date} · {r.start}–{r.end}</span>
+                    <button onClick={() => deleteReduced(r.id)} className="text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={undoConfig} disabled={!undoStack.length} className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg py-2 text-sm flex items-center justify-center gap-2 disabled:opacity-40">
+                <RotateCcw className="w-4 h-4" /> {tr("undo_btn")} ({undoStack.length})
+              </button>
+              <button onClick={redoConfig} disabled={!redoStack.length} className="bg-slate-800 border border-slate-700 text-slate-200 rounded-lg py-2 text-sm flex items-center justify-center gap-2 disabled:opacity-40">
+                {tr("redo_btn")} ({redoStack.length}) <RotateCcw className="w-4 h-4 -scale-x-100" />
+              </button>
+            </div>
+
+            <section className={cardCls}>
               <h2 className="font-semibold text-slate-100 mb-3 flex items-center gap-2">
                 <SettingsIcon className="w-4 h-4 text-[#e21a4c]" /> {tr("language_title")}
               </h2>
@@ -1815,7 +1950,20 @@ export default function App() {
               </div>
             </section>
 
-            <p className="text-center text-[11px] text-slate-600 pt-2">V. Moya, Versió 1.2.</p>
+            <div className="space-y-2">
+              <button onClick={exportBackup} className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg py-2.5 text-sm font-medium flex items-center justify-center gap-2">
+                <Download className="w-4 h-4" />
+                {tr("backup_button")}
+              </button>
+              <label className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg py-2.5 text-sm font-medium flex items-center justify-center gap-2 cursor-pointer">
+                <Upload className="w-4 h-4" />
+                {tr("import_button")}
+                <input type="file" accept=".xlsx" className="hidden" onChange={(e) => { importBackup(e.target.files[0]); e.target.value = ""; }} />
+              </label>
+              <p className="text-xs text-slate-500 text-center px-4">{importMsg || exportMsg || tr("backup_note")}</p>
+            </div>
+
+            <p className="text-center text-[11px] text-slate-600 pt-2">V. Moya, Versió 1.3.</p>
           </div>
         )}
       </main>
