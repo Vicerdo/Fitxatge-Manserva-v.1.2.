@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Clock, MapPin, Euro, Calendar, Download, Settings as SettingsIcon,
   Plus, Trash2, Pencil, X, Check, CalendarDays, Coffee, Car, Utensils,
   ListChecks, AlertCircle, ChevronLeft, ChevronRight, History, Percent,
-  TrendingUp, CalendarRange
+  TrendingUp, CalendarRange, Upload, RotateCcw
 } from "lucide-react";
 
 if (typeof window !== "undefined" && !window.storage) {
@@ -149,12 +149,19 @@ function timeToMinutes(t) {
   return h * 60 + m;
 }
 
+function normalizeEntry(e) {
+  const tickets = Array.isArray(e.tickets) ? e.tickets : (e.ticketConcept || e.ticketAmount || e.ticketDesc ? [{ concept: e.ticketConcept || "", amount: e.ticketAmount || "", desc: e.ticketDesc || "" }] : []);
+  const { ticketConcept, ticketAmount, ticketDesc, ...rest } = e;
+  return { ...rest, tickets, dayType: e.dayType || "", nocturnMode: e.nocturnMode || "auto", ot: e.ot || "" };
+}
+
 function emptyForm(dateStr, festius) {
   const sc = getStandardSchedule(dateStr, null);
   return {
     id: null, date: dateStr, workplaceId: "", start: sc.start, end: sc.end, splitDay: sc.split,
-    festiu: isHolidayDate(dateStr, festius), kmMode: "auto", kmManual: 0, dietMode: "auto",
-    parada: "auto", nocturnMode: "auto", ot: "", ticketConcept: "", ticketAmount: "", ticketDesc: "", notes: "",
+    festiu: isHolidayDate(dateStr, festius), kmMode: "auto", kmManual: 0, dietMode: "none",
+    parada: "none", nocturnMode: "auto", ot: "", tickets: [], ticketsOn: false, dayType: "", notes: "",
+    timesTouched: false, dietTouched: false, paradaTouched: false,
   };
 }
 
@@ -167,6 +174,8 @@ function computeEntry(entry, settingsVersions, workplaces, festius, parades = []
   const s = getSettingsForDate(entry.date, settingsVersions);
   const workplace = workplaces.find((w) => w.id === entry.workplaceId);
   const schedule = getStandardSchedule(entry.date, workplace);
+  const ticketsAmount = (entry.tickets || []).reduce((a, tk) => a + (Number(tk.amount) || 0), 0);
+  if (entry.dayType) return { totalHours: 0, normalHours: 0, extraHours: 0, extraHoursAmount: 0, standardHours: 0, km: 0, kmAmount: 0, dietResolved: "none", dietAmount: 0, paradaAmount: 0, paradaMode: "none", nightH: 0, nocturnAmount: 0, ticketsAmount, totalExtra: 0, holiday: entry.festiu, workplaceName: workplace ? workplace.name : "—", settingsUsed: s };
 
   let startMin = timeToMinutes(entry.start);
   let endMin = timeToMinutes(entry.end);
@@ -196,9 +205,8 @@ function computeEntry(entry, settingsVersions, workplaces, festius, parades = []
   const paradaAmount = paradaMode === "normal" ? s.plusParadaNormal : paradaMode === "festiu" ? s.plusParadaFestiu : 0;
   const nightH = entry.nocturnMode === "off" ? 0 : nightHours(entry.start, entry.end);
   const nocturnAmount = nightH * (s.plusNocturnitat || 0);
-  const ticketsAmount = Number(entry.ticketAmount) || 0;
 
-  const totalExtra = extraHoursAmount + kmAmount + dietAmount + paradaAmount + nocturnAmount + ticketsAmount;
+  const totalExtra = extraHoursAmount + kmAmount + dietAmount + paradaAmount + nocturnAmount;
 
   return {
     totalHours, normalHours, extraHours, extraHoursAmount, standardHours: schedule.hours,
@@ -246,6 +254,33 @@ function monthsBetween(startStr, endStr) {
 
 const STRINGS = {
   ca: {
+    other_place: "Altre",
+    legend_festiu: "Festiu",
+    daytype_title: "Tipus de dia",
+    daytype_work: "Treball",
+    daytype_descans: "Descans",
+    daytype_vacances: "Vacances",
+    daytype_baixa: "Baixa",
+    daytype_personal: "Dia personal",
+    daytype_altres: "Altres",
+    ab_descans: "Desc.",
+    ab_vacances: "Vac.",
+    ab_baixa: "Baixa",
+    ab_personal: "D. Per.",
+    ab_altres: "Altre",
+    add_ticket: "Afegeix tiquet",
+    no_tickets: "No hi ha tiquets en l'interval.",
+    tickets_note: "No compten als totals de diners.",
+    dup_warn: "Ja existeix un fitxatge per a aquest dia. Si continues, s'esborrarà l'anterior.",
+    dup_accept: "Accepta i continua",
+    ot_title: "OT",
+    ot_note: "Afegeix les OT. A fitxatge sortiran en un desplegable, primer les últimes utilitzades.",
+    ot_placeholder: "Nom de l'OT",
+    undo_btn: "Tirar enrere l'últim canvi",
+    import_button: "Importa còpia (Excel)",
+    import_note: "Importa una còpia completa: afegeix els dies i la configuració que falten, sense esborrar el que ja tens.",
+    import_err: "No s'ha pogut llegir l'Excel.",
+    import_ok: (a, s) => `Importats ${a} dies${s ? ` (${s} omesos: ja existien)` : ""}.`,
     diet_short_mitja: "Mitja",
     diet_short_completa: "Completa",
     legend_parada_festiu: "Parada festiu",
@@ -331,6 +366,33 @@ const STRINGS = {
     nav_fitxatge: "Fitxatge", nav_calendari: "Calendari", nav_resum: "Resum", nav_config: "Configuració",
   },
   es: {
+    other_place: "Otro",
+    legend_festiu: "Festivo",
+    daytype_title: "Tipo de día",
+    daytype_work: "Trabajo",
+    daytype_descans: "Descanso",
+    daytype_vacances: "Vacaciones",
+    daytype_baixa: "Baja",
+    daytype_personal: "Día personal",
+    daytype_altres: "Otros",
+    ab_descans: "Desc.",
+    ab_vacances: "Vac.",
+    ab_baixa: "Baja",
+    ab_personal: "D. Per.",
+    ab_altres: "Otro",
+    add_ticket: "Añadir tique",
+    no_tickets: "No hay tiques en el intervalo.",
+    tickets_note: "No cuentan en los totales de dinero.",
+    dup_warn: "Ya existe un fichaje para este día. Si continúas, se borrará el anterior.",
+    dup_accept: "Aceptar y continuar",
+    ot_title: "OT",
+    ot_note: "Añade las OT. En fichaje saldrán en un desplegable, primero las últimas usadas.",
+    ot_placeholder: "Nombre de la OT",
+    undo_btn: "Deshacer el último cambio",
+    import_button: "Importar copia (Excel)",
+    import_note: "Importa una copia completa: añade los días y la configuración que faltan, sin borrar lo que ya tienes.",
+    import_err: "No se ha podido leer el Excel.",
+    import_ok: (a, s) => `Importados ${a} días${s ? ` (${s} omitidos: ya existían)` : ""}.`,
     diet_short_mitja: "Media",
     diet_short_completa: "Completa",
     legend_parada_festiu: "Parada festivo",
@@ -433,6 +495,29 @@ export default function App() {
   const [parades, setParades] = useState([]);
   const [paradaForm, setParadaForm] = useState({ workplaceId: "", start: "", end: "" });
   const [exportMsg, setExportMsg] = useState("");
+  const [ots, setOts] = useState([]);
+  const [otInput, setOtInput] = useState("");
+  const [importMsg, setImportMsg] = useState("");
+  const [undoStack, setUndoStack] = useState([]);
+  const [dupConfirm, setDupConfirm] = useState(false);
+  const prevCfg = useRef(null);
+  const lastPush = useRef(0);
+  const skipUndo = useRef(false);
+
+  useEffect(() => {
+    if (loading) return;
+    const cur = JSON.stringify({ settingsVersions, workplaces, parades, festius, ots, retencioPercent, monthlyBaseOverrides });
+    if (prevCfg.current === null || cur === prevCfg.current) { prevCfg.current = cur; return; }
+    if (skipUndo.current) { skipUndo.current = false; prevCfg.current = cur; return; }
+    const now = Date.now();
+    if (now - lastPush.current > 1500) { const old = JSON.parse(prevCfg.current); setUndoStack((s) => [...s.slice(-9), old]); }
+    lastPush.current = now;
+    prevCfg.current = cur;
+  }, [settingsVersions, workplaces, parades, festius, ots, retencioPercent, monthlyBaseOverrides, loading]);
+
+  useEffect(() => {
+    if (!loading) { try { window.storage.set("app-undo", JSON.stringify(undoStack), false); } catch (e) { /* ignore */ } }
+  }, [undoStack, loading]);
 
   const [tab, setTab] = useState("fitxatge");
   const [form, setForm] = useState(emptyForm(todayStr(), DEFAULT_FESTIUS_2026));
@@ -459,7 +544,9 @@ export default function App() {
           setRetencioPercent(typeof data.retencioPercent === "number" ? data.retencioPercent : 15);
           setWorkplaces(data.workplaces && data.workplaces.length ? data.workplaces : DEFAULT_WORKPLACES);
           setFestius(data.festius && data.festius.length ? data.festius : DEFAULT_FESTIUS_2026);
-          setEntries(data.entries || []);
+          setEntries((data.entries || []).map(normalizeEntry));
+          setOts(data.ots || []);
+          try { const u = await window.storage.get("app-undo", false); if (u && u.value) setUndoStack(JSON.parse(u.value)); } catch (e) { /* none */ }
           setMonthlyBaseOverrides(data.monthlyBaseOverrides || {});
           setLang(data.lang === "es" ? "es" : "ca");
           setParades(data.parades || []);
@@ -482,6 +569,7 @@ export default function App() {
       monthlyBaseOverrides: next.monthlyBaseOverrides ?? monthlyBaseOverrides,
       lang: next.lang ?? lang,
       parades: next.parades ?? parades,
+      ots: next.ots ?? ots,
     };
     try {
       const result = await window.storage.set(STORAGE_KEY, JSON.stringify(payload), false);
@@ -493,16 +581,45 @@ export default function App() {
 
   function handleDateChange(dateStr) {
     const sc = getStandardSchedule(dateStr, workplaces.find((w) => w.id === form.workplaceId));
-    setForm((f) => ({ ...f, date: dateStr, festiu: isHolidayDate(dateStr, festius), ...(f.id ? {} : { start: sc.start, end: sc.end, splitDay: sc.split }) }));
+    setForm((f) => ({ ...f, date: dateStr, festiu: isHolidayDate(dateStr, festius), ...(f.id || f.timesTouched ? {} : { start: sc.start, end: sc.end, splitDay: sc.split }) }));
   }
 
   function handleWorkplaceChange(id) {
     const sc = getStandardSchedule(form.date, workplaces.find((w) => w.id === id));
-    setForm((f) => ({ ...f, workplaceId: id, kmMode: "auto", ...(f.id ? {} : { start: sc.start, end: sc.end, splitDay: sc.split }) }));
+    setForm((f) => ({ ...f, workplaceId: id, kmMode: "auto", ...(f.id || f.timesTouched ? {} : { start: sc.start, end: sc.end, splitDay: sc.split }) }));
   }
 
+  useEffect(() => {
+    const wp = workplaces.find((w) => w.id === form.workplaceId);
+    let s = timeToMinutes(form.start), e = timeToMinutes(form.end);
+    if (e <= s) e += 1440;
+    const autoOn = !!wp && wp.autoDieta && (e - s) / 60 > 8;
+    setForm((f) => {
+      if (f.dayType || f.dietTouched) return f;
+      const want = autoOn ? "mitja" : "none";
+      if (f.dietMode === want && (!autoOn || f.splitDay)) return f;
+      return { ...f, dietMode: want, ...(autoOn ? { splitDay: true } : {}) };
+    });
+  }, [form.workplaceId, form.start, form.end, workplaces]);
+
+  useEffect(() => {
+    setForm((f) => {
+      if (f.paradaTouched || f.dayType) return f;
+      const m = resolveParada({ ...f, parada: "auto" }, parades);
+      return f.parada === m ? f : { ...f, parada: m };
+    });
+  }, [form.workplaceId, form.date, form.festiu, parades]);
+
+  const setTicket = (i, k, v) => setForm((f) => ({ ...f, tickets: f.tickets.map((tk, j) => (j === i ? { ...tk, [k]: v } : tk)) }));
+  const addTicket = () => setForm((f) => ({ ...f, tickets: [...f.tickets, { concept: "", amount: "", desc: "" }] }));
+  const removeTicket = (i) => setForm((f) => ({ ...f, tickets: f.tickets.filter((_, j) => j !== i) }));
+
   function startEdit(entry) {
-    setForm({ ...emptyForm(entry.date, festius), ...entry });
+    const e = normalizeEntry(entry);
+    const wp = workplaces.find((w) => w.id === e.workplaceId);
+    let ms = timeToMinutes(e.start), me = timeToMinutes(e.end);
+    if (me <= ms) me += 1440;
+    setForm({ ...emptyForm(e.date, festius), ...e, dietMode: e.dietMode === "auto" ? resolveDiet(e, wp, (me - ms) / 60) : e.dietMode, parada: !e.parada || e.parada === "auto" ? resolveParada({ ...e, parada: "auto" }, parades) : e.parada, ticketsOn: e.tickets.length > 0, timesTouched: true, dietTouched: true, paradaTouched: true });
     setTab("fitxatge");
   }
 
@@ -510,30 +627,41 @@ export default function App() {
     setForm(emptyForm(form.date || todayStr(), festius));
   }
 
-  useEffect(() => {
-    if (form.dietMode !== "auto" || form.splitDay) return;
-    const workplace = workplaces.find((w) => w.id === form.workplaceId);
-    if (!workplace || !workplace.autoDieta) return;
-    let startMin = timeToMinutes(form.start);
-    let endMin = timeToMinutes(form.end);
-    if (endMin <= startMin) endMin += 24 * 60;
-    const rawHours = (endMin - startMin) / 60;
-    if (rawHours > 8) {
-      setForm((f) => ({ ...f, splitDay: true }));
-    }
-  }, [form.workplaceId, form.start, form.end, form.dietMode, workplaces]);
 
-  async function submitEntry() {
-    let next;
-    if (form.id) {
-      next = entries.map((e) => (e.id === form.id ? { ...form } : e));
-    } else {
-      next = [...entries, { ...form, id: Date.now().toString() }];
-    }
-    next.sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start));
+  async function submitEntry(force) {
+    if (entries.some((e) => e.date === form.date && e.id !== form.id) && force !== true) { setDupConfirm(true); return; }
+    setDupConfirm(false);
+    const { timesTouched, dietTouched, paradaTouched, ticketsOn, ...clean } = form;
+    const rec = { ...clean, id: form.id || Date.now().toString(), tickets: ticketsOn ? form.tickets.filter((tk) => tk.concept || tk.amount || tk.desc) : [] };
+    const next = [...entries.filter((e) => e.date !== rec.date && e.id !== rec.id), rec].sort((a, b) => a.date.localeCompare(b.date));
     setEntries(next);
     await persist({ entries: next });
     resetForm();
+  }
+
+  async function undoConfig() {
+    if (!undoStack.length) return;
+    const s = undoStack[undoStack.length - 1];
+    skipUndo.current = true;
+    setSettingsVersions(s.settingsVersions); setWorkplaces(s.workplaces); setParades(s.parades); setFestius(s.festius);
+    setOts(s.ots); setRetencioPercent(s.retencioPercent); setMonthlyBaseOverrides(s.monthlyBaseOverrides);
+    setUndoStack(undoStack.slice(0, -1));
+    await persist({ ...s });
+  }
+
+  async function addOT() {
+    const v = otInput.trim();
+    if (!v || ots.includes(v)) return;
+    const next = [...ots, v];
+    setOts(next);
+    setOtInput("");
+    await persist({ ots: next });
+  }
+
+  async function deleteOT(o) {
+    const next = ots.filter((x) => x !== o);
+    setOts(next);
+    await persist({ ots: next });
   }
 
   async function deleteEntry(id) {
@@ -645,7 +773,7 @@ export default function App() {
       paradaAmount += c.paradaAmount;
       nocturnAmount += c.nocturnAmount; nocturnHours += c.nightH; ticketsAmount += c.ticketsAmount;
     });
-    const totalExtra = extraHoursAmount + kmAmount + dietAmount + paradaAmount + nocturnAmount + ticketsAmount;
+    const totalExtra = extraHoursAmount + kmAmount + dietAmount + paradaAmount + nocturnAmount;
     const base = getBaseForMonth(monthStr);
     const totalBrut = base + totalExtra;
     const totalNet = totalBrut * (1 - retencioPercent / 100);
@@ -674,7 +802,7 @@ export default function App() {
     });
     const dietAmount = mitjaAmount + completaAmount;
     const paradaAmount = paradaNormalAmount + paradaFestiuAmount;
-    const totalExtra = extraHoursAmount + kmAmount + dietAmount + paradaAmount + nocturnAmount + ticketsAmount;
+    const totalExtra = extraHoursAmount + kmAmount + dietAmount + paradaAmount + nocturnAmount;
     const months = monthsBetween(startStr, endStr);
     const baseTotal = months.reduce((sum, m) => {
       const [y, mm] = m.split("-").map(Number);
@@ -746,29 +874,45 @@ export default function App() {
     return cells;
   }, [month]);
 
+  const otOptions = useMemo(() => {
+    const seen = [];
+    [...entries].sort((a, b) => b.date.localeCompare(a.date)).forEach((e) => { if (e.ot && ots.includes(e.ot) && !seen.includes(e.ot)) seen.push(e.ot); });
+    return [...seen, ...ots.filter((o) => !seen.includes(o))];
+  }, [entries, ots]);
+
+  async function loadExcelJS() {
+    try { const mod = await import("exceljs"); return mod.default || mod; } catch (err) { return null; }
+  }
+
+  function download(buf, name) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+
   async function exportExcel() {
     if (!rangeSummary) { setExportMsg(tr("invalid_range")); return; }
-    const rows = entries.filter((e) => e.date >= rangeStart && e.date <= rangeEnd).sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start));
+    const rows = entries.filter((e) => e.date >= rangeStart && e.date <= rangeEnd).sort((a, b) => a.date.localeCompare(b.date));
     if (!rows.length) { setExportMsg(tr("no_entries_range")); return; }
+    const ExcelJS = await loadExcelJS();
+    if (!ExcelJS) { setExportMsg("Excel: només disponible a la versió de Netlify."); return; }
     setExportMsg("");
-    let ExcelJS;
-    try { const mod = await import("exceljs"); ExcelJS = mod.default || mod; } catch (err) { setExportMsg("Excel: només disponible a la versió de Netlify."); return; }
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Fitxatges");
-    const heads = ["Data", "Hores", "Ubicació", "Km", "Dieta", "Plus", "Turno nit", "OT", "Tiquets", "Descripció"];
-    ws.columns = heads.map((h, i) => ({ header: h, key: "c" + i, width: [12, 9, 18, 8, 11, 11, 11, 14, 11, 44][i] }));
+    const heads = ["Data", "Hores", "Hores extra", "Ubicació", "Km", "Dieta", "Plus", "Turno nit", "OT", "Descripció"];
+    ws.columns = heads.map((h, i) => ({ header: h, key: "c" + i, width: [12, 9, 11, 18, 8, 11, 11, 11, 14, 44][i] }));
     const thin = { style: "thin", color: { argb: "FFD1D5DB" } };
     const border = { top: thin, left: thin, bottom: thin, right: thin };
     rows.forEach((e) => {
       const c = computeEntry(e, settingsVersions, workplaces, festius, parades);
       const [y, m, d] = e.date.split("-").map(Number);
-      const desc = [e.notes, e.ticketConcept || e.ticketDesc ? `Tiquet: ${[e.ticketConcept, e.ticketDesc].filter(Boolean).join(" - ")}` : ""].filter(Boolean).join(" | ");
-      ws.addRow([new Date(Date.UTC(y, m - 1, d)), Number(c.totalHours.toFixed(2)), c.workplaceName, c.km, c.dietAmount, c.paradaAmount, Number(c.nightH.toFixed(2)), e.ot || "", c.ticketsAmount, desc]);
+      ws.addRow([new Date(Date.UTC(y, m - 1, d)), e.dayType ? "" : Number(c.normalHours.toFixed(2)), e.dayType ? "" : Number(c.extraHours.toFixed(2)), e.dayType ? tr("daytype_" + e.dayType) : c.workplaceName, c.km, c.dietAmount, c.paradaAmount, Number(c.nightH.toFixed(2)), e.ot || "", e.notes || ""]);
     });
     const last = rows.length + 1;
     const tot = ws.addRow(["Total"]);
-    const sums = { B: 2, D: 4, E: 5, F: 6, G: 7, I: 9 };
-    Object.entries(sums).forEach(([col, idx]) => {
+    Object.entries({ B: 2, C: 3, E: 5, F: 6, G: 7, H: 8 }).forEach(([col, idx]) => {
       const v = rows.reduce((s, _, i) => s + (Number(ws.getRow(i + 2).getCell(idx).value) || 0), 0);
       tot.getCell(idx).value = { formula: `SUBTOTAL(109,${col}2:${col}${last})`, result: Number(v.toFixed(2)) };
     });
@@ -778,21 +922,16 @@ export default function App() {
       else if (rn === last + 1) { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F2937" } }; cell.font = { bold: true, color: { argb: "FFFFFFFF" } }; }
       else cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: rn % 2 ? "FFFBE9ED" : "FFFFFFFF" } };
       if (rn > 1 && cn === 1 && rn <= last) cell.numFmt = "dd/mm/yyyy";
-      if (rn > 1 && [5, 6, 9].includes(cn)) cell.numFmt = '#,##0.00 "€"';
+      if (rn > 1 && [6, 7].includes(cn)) cell.numFmt = '#,##0.00 "€"';
     }));
     ws.views = [{ state: "frozen", ySplit: 1 }];
     ws.autoFilter = { from: "A1", to: `J${last}` };
-    const buf = await wb.xlsx.writeBuffer();
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
-    a.download = `fitxatges-${rangeStart}_${rangeEnd}.xlsx`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    download(await wb.xlsx.writeBuffer(), `fitxatges-${rangeStart}_${rangeEnd}.xlsx`);
   }
 
   async function exportBackup() {
-    let ExcelJS;
-    try { const mod = await import("exceljs"); ExcelJS = mod.default || mod; } catch (err) { setExportMsg("Excel: només disponible a la versió de Netlify."); return; }
+    const ExcelJS = await loadExcelJS();
+    if (!ExcelJS) { setExportMsg("Excel: només disponible a la versió de Netlify."); return; }
     const wb = new ExcelJS.Workbook();
     const sheet = (name, keys, rows) => {
       const ws = wb.addWorksheet(name);
@@ -801,19 +940,104 @@ export default function App() {
       ws.getRow(1).font = { bold: true };
       ws.columns.forEach((c) => { c.width = 16; });
     };
-    sheet("Fitxatges", ["id", "date", "workplaceId", "start", "end", "splitDay", "festiu", "kmMode", "kmManual", "dietMode", "parada", "nocturnMode", "ot", "ticketConcept", "ticketAmount", "ticketDesc", "notes"], entries);
+    sheet("Fitxatges", ["id", "date", "workplaceId", "start", "end", "splitDay", "festiu", "kmMode", "kmManual", "dietMode", "parada", "nocturnMode", "ot", "notes", "dayType"], entries);
+    sheet("Tiquets", ["entryId", "date", "concept", "amount", "desc"], entries.flatMap((e) => (e.tickets || []).map((tk) => ({ entryId: e.id, date: e.date, ...tk }))));
+    sheet("OT", ["name"], ots.map((name) => ({ name })));
     sheet("Preus", ["id", "effectiveFrom", "souBase", "preuHoraExtra", "preuKm", "mitjaDieta", "dietaCompleta", "plusParadaNormal", "plusParadaFestiu", "plusNocturnitat"], settingsVersions);
     sheet("Llocs", ["id", "name", "km", "autoDieta", "horari"], workplaces.map((w) => ({ ...w, horari: isPartit(w) ? "partit" : "normal" })));
     sheet("Parades", ["id", "workplaceId", "start", "end"], parades);
     sheet("Festius", ["date"], festius.map((d) => ({ date: d })));
     sheet("SouMensual", ["month", "souBase"], Object.entries(monthlyBaseOverrides).map(([month, souBase]) => ({ month, souBase })));
     sheet("Config", ["key", "value"], [{ key: "appVersion", value: "1.2" }, { key: "exportedAt", value: todayStr() }, { key: "retencioPercent", value: retencioPercent }, { key: "lang", value: lang }]);
-    const buf = await wb.xlsx.writeBuffer();
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
-    a.download = `fitxatge-copia-completa-${todayStr()}.xlsx`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    download(await wb.xlsx.writeBuffer(), `fitxatge-copia-completa-${todayStr()}.xlsx`);
+  }
+
+  async function importBackup(file) {
+    if (!file) return;
+    const ExcelJS = await loadExcelJS();
+    if (!ExcelJS) { setImportMsg("Excel: només disponible a la versió de Netlify."); return; }
+    try {
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(await file.arrayBuffer());
+      const iso = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v ?? "").slice(0, 10));
+      const tm = (v) => {
+        if (typeof v === "number" && v < 1) { const mm = Math.round(v * 1440); return `${String(Math.floor(mm / 60) % 24).padStart(2, "0")}:${String(mm % 60).padStart(2, "0")}`; }
+        if (v instanceof Date) return `${String(v.getUTCHours()).padStart(2, "0")}:${String(v.getUTCMinutes()).padStart(2, "0")}`;
+        const s = String(v ?? ""); return (s.length === 4 ? "0" + s : s).slice(0, 5);
+      };
+      const bool = (v) => v === true || v === 1 || /^(true|1|si|sí|yes)$/i.test(String(v));
+      const num = (v) => (v === "" || v == null ? 0 : Number(v) || 0);
+      const read = (name) => {
+        const ws = wb.getWorksheet(name);
+        const rows = [];
+        if (!ws) return rows;
+        let keys = null;
+        ws.eachRow((row) => {
+          const vals = row.values.slice(1);
+          if (!keys) { keys = vals.map((v) => String(v ?? "")); return; }
+          const o = {};
+          keys.forEach((k, i) => { let v = vals[i]; if (v && typeof v === "object" && !(v instanceof Date) && v.result !== undefined) v = v.result; o[k] = v === undefined || v === null ? "" : v; });
+          rows.push(o);
+        });
+        return rows;
+      };
+      const idMap = {};
+      const wps = [...workplaces];
+      read("Llocs").forEach((w) => {
+        const id = String(w.id), name = String(w.name);
+        const found = wps.find((x) => x.id === id) || wps.find((x) => x.name.toLowerCase() === name.toLowerCase());
+        if (found) idMap[id] = found.id;
+        else { wps.push({ id, name, km: num(w.km), autoDieta: bool(w.autoDieta), horari: w.horari === "partit" ? "partit" : "normal" }); idMap[id] = id; }
+      });
+      const sv = [...settingsVersions];
+      read("Preus").forEach((p) => {
+        const v = { id: String(p.id || Date.now() + Math.random()), effectiveFrom: iso(p.effectiveFrom), souBase: num(p.souBase), preuHoraExtra: num(p.preuHoraExtra), preuKm: num(p.preuKm), mitjaDieta: num(p.mitjaDieta), dietaCompleta: num(p.dietaCompleta), plusParadaNormal: num(p.plusParadaNormal), plusParadaFestiu: num(p.plusParadaFestiu), plusNocturnitat: num(p.plusNocturnitat) };
+        const i = sv.findIndex((x) => x.effectiveFrom === v.effectiveFrom);
+        if (i < 0) sv.push(v); else if (!sv[i].souBase && !sv[i].preuHoraExtra) sv[i] = { ...v, id: sv[i].id };
+      });
+      const pd = [...parades];
+      read("Parades").forEach((p) => {
+        const wid = idMap[String(p.workplaceId)] ?? String(p.workplaceId), start = iso(p.start), end = iso(p.end);
+        if (!pd.some((x) => x.workplaceId === wid && x.start === start && x.end === end)) pd.push({ id: String(p.id || Date.now() + Math.random()), workplaceId: wid, start, end });
+      });
+      const fs = [...new Set([...festius, ...read("Festius").map((r) => iso(r.date)).filter((d) => d.length === 10)])].sort();
+      const mo = { ...monthlyBaseOverrides };
+      read("SouMensual").forEach((r) => { if (r.month && mo[r.month] === undefined) mo[r.month] = num(r.souBase); });
+      const cfgRet = read("Config").find((r) => r.key === "retencioPercent");
+      const ret = cfgRet && retencioPercent === 15 && cfgRet.value !== "" ? num(cfgRet.value) : retencioPercent;
+      const ticketsById = {};
+      read("Tiquets").forEach((r) => { (ticketsById[String(r.entryId)] = ticketsById[String(r.entryId)] || []).push({ concept: String(r.concept || ""), amount: r.amount === "" ? "" : num(r.amount), desc: String(r.desc || "") }); });
+      const have = new Set(entries.map((e) => e.date));
+      let added = 0, skipped = 0;
+      const fresh = [];
+      read("Fitxatges").forEach((r, idx) => {
+        const date = iso(r.date);
+        if (date.length !== 10) return;
+        if (have.has(date)) { skipped++; return; }
+        have.add(date);
+        const id = String(r.id || Date.now() + "-" + idx);
+        const e = normalizeEntry({
+          id, date, workplaceId: idMap[String(r.workplaceId)] ?? String(r.workplaceId || ""), start: tm(r.start) || "07:00", end: tm(r.end) || "15:00",
+          splitDay: bool(r.splitDay), festiu: r.festiu === "" ? isHolidayDate(date, fs) : bool(r.festiu), kmMode: r.kmMode === "manual" ? "manual" : "auto", kmManual: num(r.kmManual),
+          dietMode: String(r.dietMode || "none"), parada: String(r.parada || "none"), nocturnMode: r.nocturnMode === "off" ? "off" : "auto", ot: String(r.ot || ""), notes: String(r.notes || ""), dayType: String(r.dayType || ""),
+          ...(ticketsById[id] ? { tickets: ticketsById[id] } : { ticketConcept: r.ticketConcept, ticketAmount: r.ticketAmount, ticketDesc: r.ticketDesc }),
+        });
+        const wp = wps.find((w) => w.id === e.workplaceId);
+        let ms = timeToMinutes(e.start), me = timeToMinutes(e.end);
+        if (me <= ms) me += 1440;
+        if (e.dietMode === "auto") e.dietMode = resolveDiet(e, wp, (me - ms) / 60);
+        if (e.parada === "auto") e.parada = resolveParada(e, pd);
+        fresh.push(e);
+        added++;
+      });
+      const allEntries = [...entries, ...fresh].sort((a, b) => a.date.localeCompare(b.date));
+      const otList = [...new Set([...ots, ...read("OT").map((r) => String(r.name)).filter(Boolean), ...fresh.map((e) => e.ot).filter(Boolean)])];
+      setEntries(allEntries); setWorkplaces(wps); setSettingsVersions(sv); setParades(pd); setFestius(fs); setMonthlyBaseOverrides(mo); setOts(otList); setRetencioPercent(ret);
+      await persist({ entries: allEntries, workplaces: wps, settingsVersions: sv, parades: pd, festius: fs, monthlyBaseOverrides: mo, ots: otList, retencioPercent: ret });
+      setImportMsg(tr("import_ok", added, skipped));
+    } catch (err) {
+      setImportMsg(tr("import_err"));
+    }
   }
 
   if (loading) {
@@ -828,6 +1052,7 @@ export default function App() {
   const kmValue = form.kmMode === "manual" ? form.kmManual : selWp ? selWp.km : 0;
   const formNight = nightHours(form.start, form.end);
   const formParada = resolveParada(form, parades);
+  const rangeTickets = rangeSummary ? entries.filter((e) => e.date >= rangeStart && e.date <= rangeEnd).flatMap((e) => (e.tickets || []).map((tk) => ({ date: e.date, ...tk }))) : [];
   const selectedEntry = selectedDay ? entries.find((e) => e.date === selectedDay) : null;
   const selectedComputed = selectedEntry ? computeEntry(selectedEntry, settingsVersions, workplaces, festius, parades) : null;
 
@@ -882,13 +1107,13 @@ export default function App() {
                 </label>
                 <label className={labelCls}>
                   {tr("label_start")}
-                  <select value={form.start} onChange={(e) => setForm((f) => ({ ...f, start: e.target.value }))} className={inputCls}>
+                  <select value={form.start} onChange={(e) => setForm((f) => ({ ...f, start: e.target.value, timesTouched: true }))} className={inputCls}>
                     {TIME_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </label>
                 <label className={labelCls}>
                   {tr("label_end")}
-                  <select value={form.end} onChange={(e) => setForm((f) => ({ ...f, end: e.target.value }))} className={inputCls}>
+                  <select value={form.end} onChange={(e) => setForm((f) => ({ ...f, end: e.target.value, timesTouched: true }))} className={inputCls}>
                     {TIME_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </label>
@@ -915,13 +1140,13 @@ export default function App() {
                 <label className={`${labelCls} flex items-center gap-1.5 mb-1`}>
                   <MapPin className="w-3.5 h-3.5" /> {tr("label_workplace")}
                 </label>
-                <div className="flex flex-wrap gap-2">
-                  {[{ id: "", name: tr("diet_none") }, ...workplaces].map((w) => (
+                <div className={workplaces.length > 3 ? "flex flex-wrap gap-2" : "flex gap-2"}>
+                  {[...workplaces, { id: "", name: tr("other_place") }].map((w) => (
                     <button
                       key={w.id || "none"}
                       type="button"
                       onClick={() => handleWorkplaceChange(w.id)}
-                      className={`flex-1 min-w-[30%] rounded-lg py-1.5 text-xs font-medium border ${
+                      className={`flex-1 ${workplaces.length > 3 ? "min-w-[30%]" : ""} rounded-lg py-1.5 text-xs font-medium border ${
                         form.workplaceId === w.id ? "bg-[#be0936] border-[#be0936] text-white" : "bg-slate-800 border-slate-700 text-slate-300"
                       }`}
                     >
@@ -947,7 +1172,6 @@ export default function App() {
                 </label>
                 <div className="flex gap-2">
                   {[
-                    ["auto", tr("parada_auto")],
                     ["none", tr("diet_none")],
                     ["mitja", `${tr("diet_short_mitja")} (${fmt(getSettingsForDate(form.date, settingsVersions).mitjaDieta)}€)`],
                     ["completa", `${tr("diet_short_completa")} (${fmt(getSettingsForDate(form.date, settingsVersions).dietaCompleta)}€)`],
@@ -955,7 +1179,7 @@ export default function App() {
                     <button
                       key={val}
                       type="button"
-                      onClick={() => setForm((f) => ({ ...f, dietMode: val }))}
+                      onClick={() => setForm((f) => ({ ...f, dietMode: val, dietTouched: true }))}
                       className={`flex-1 rounded-lg py-1.5 text-xs font-medium border ${
                         form.dietMode === val ? "bg-[#be0936] border-[#be0936] text-white" : "bg-slate-800 border-slate-700 text-slate-300"
                       }`}
@@ -972,14 +1196,13 @@ export default function App() {
                 </label>
                 <div className="flex gap-2">
                   {[
-                    ["auto", tr("parada_auto")],
                     ["none", tr("parada_none")],
                     ["normal", `${tr("parada_normal")} (${fmt(getSettingsForDate(form.date, settingsVersions).plusParadaNormal)}€)`],
                     ["festiu", `${tr("parada_festiu")} (${fmt(getSettingsForDate(form.date, settingsVersions).plusParadaFestiu)}€)`],
                   ].map(([val, lbl]) => (
                     <button
                       key={val}
-                      onClick={() => setForm((f) => ({ ...f, parada: val }))}
+                      onClick={() => setForm((f) => ({ ...f, parada: val, paradaTouched: true }))}
                       className={`flex-1 rounded-lg py-1.5 text-xs font-medium border ${
                         form.parada === val ? "bg-[#be0936] border-[#be0936] text-white" : "bg-slate-800 border-slate-700 text-slate-300"
                       }`}
@@ -990,10 +1213,6 @@ export default function App() {
                 </div>
               </div>
 
-              {form.parada === "auto" && (
-                <p className="text-xs text-slate-500 -mt-3 mb-3">{tr("parada_auto_hint")} {formParada === "none" ? tr("parada_none") : formParada === "normal" ? tr("parada_normal") : tr("parada_festiu")}</p>
-              )}
-
               <label className="flex items-center gap-2 text-sm text-slate-200 mb-3">
                 <input type="checkbox" disabled={formNight === 0} checked={formNight > 0 && form.nocturnMode !== "off"} onChange={(e) => setForm((f) => ({ ...f, nocturnMode: e.target.checked ? "auto" : "off" }))} className="rounded" />
                 <Clock className="w-3.5 h-3.5 text-slate-500" />
@@ -1002,7 +1221,10 @@ export default function App() {
 
               <div className="mb-3">
                 <label className={labelCls}>{tr("label_ot")}</label>
-                <input type="text" value={form.ot || ""} onChange={(e) => setForm((f) => ({ ...f, ot: e.target.value }))} className={inputCls} />
+                <select value={form.ot || ""} onChange={(e) => setForm((f) => ({ ...f, ot: e.target.value }))} className={inputCls}>
+                  <option value="">—</option>
+                  {(form.ot && !otOptions.includes(form.ot) ? [form.ot, ...otOptions] : otOptions).map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
               </div>
 
               <div className="mb-4">
@@ -1016,17 +1238,49 @@ export default function App() {
                 />
               </div>
 
-              <div className="mb-4 rounded-lg border border-slate-800 p-3">
-                <div className={`${labelCls} mb-1`}>{tr("tickets_title")}</div>
-                <div className="grid grid-cols-3 gap-2">
-                  <input className={`${inputCls} col-span-2 !mt-0`} placeholder={tr("ticket_concept")} value={form.ticketConcept || ""} onChange={(e) => setForm((f) => ({ ...f, ticketConcept: e.target.value }))} />
-                  <input type="number" step="0.01" className={`${inputCls} !mt-0`} placeholder="€" value={form.ticketAmount || ""} onChange={(e) => setForm((f) => ({ ...f, ticketAmount: e.target.value }))} />
-                  <input className={`${inputCls} col-span-3 !mt-0`} placeholder={tr("ticket_desc")} value={form.ticketDesc || ""} onChange={(e) => setForm((f) => ({ ...f, ticketDesc: e.target.value }))} />
+              <div className="mb-3">
+                <label className="flex items-center gap-2 text-sm text-slate-200">
+                  <input type="checkbox" checked={!!form.ticketsOn} onChange={(e) => setForm((f) => ({ ...f, ticketsOn: e.target.checked, tickets: e.target.checked && !f.tickets.length ? [{ concept: "", amount: "", desc: "" }] : f.tickets }))} className="rounded" />
+                  {tr("tickets_title")}
+                </label>
+                {form.ticketsOn && (
+                  <div className="mt-2 space-y-2">
+                    {form.tickets.map((tk, i) => (
+                      <div key={i} className="grid grid-cols-3 gap-2 rounded-lg border border-slate-800 p-2">
+                        <input className={`${inputCls} col-span-2 !mt-0`} placeholder={tr("ticket_concept")} value={tk.concept} onChange={(e) => setTicket(i, "concept", e.target.value)} />
+                        <input type="number" step="0.01" className={`${inputCls} !mt-0`} placeholder="€" value={tk.amount} onChange={(e) => setTicket(i, "amount", e.target.value)} />
+                        <input className={`${inputCls} col-span-2 !mt-0`} placeholder={tr("ticket_desc")} value={tk.desc} onChange={(e) => setTicket(i, "desc", e.target.value)} />
+                        <button type="button" onClick={() => removeTicket(i)} className="text-red-400 text-xs">{tr("btn_delete")}</button>
+                      </div>
+                    ))}
+                    <button type="button" onClick={addTicket} className="text-xs text-[#e21a4c]">+ {tr("add_ticket")}</button>
+                  </div>
+                )}
+              </div>
+
+              <div className="mb-4">
+                <label className={`${labelCls} mb-1 block`}>{tr("daytype_title")}</label>
+                <div className="flex flex-wrap gap-2">
+                  {["", "descans", "vacances", "baixa", "personal", "altres"].map((k) => (
+                    <button key={k || "work"} type="button" onClick={() => setForm((f) => ({ ...f, dayType: k }))} className={`flex-1 min-w-[30%] rounded-lg py-1.5 text-xs font-medium border ${form.dayType === k ? "bg-[#be0936] border-[#be0936] text-white" : "bg-slate-800 border-slate-700 text-slate-300"}`}>
+                      {k ? tr("daytype_" + k) : tr("daytype_work")}
+                    </button>
+                  ))}
                 </div>
               </div>
 
+              {dupConfirm && (
+                <div className="mb-3 rounded-lg border border-amber-700 bg-amber-950/40 p-3 text-xs text-amber-200">
+                  {tr("dup_warn")}
+                  <div className="flex gap-2 mt-2">
+                    <button type="button" onClick={() => submitEntry(true)} className="flex-1 bg-[#be0936] text-white rounded-lg py-1.5">{tr("dup_accept")}</button>
+                    <button type="button" onClick={() => setDupConfirm(false)} className="flex-1 bg-slate-800 text-slate-300 rounded-lg py-1.5">{tr("btn_cancel")}</button>
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-2">
-                <button onClick={submitEntry} className="flex-1 bg-[#be0936] text-white rounded-lg py-2 text-sm font-medium flex items-center justify-center gap-1.5">
+                <button onClick={() => submitEntry()} className="flex-1 bg-[#be0936] text-white rounded-lg py-2 text-sm font-medium flex items-center justify-center gap-1.5">
                   <Check className="w-4 h-4" />
                   {form.id ? tr("btn_update") : tr("btn_add_entry")}
                 </button>
@@ -1048,6 +1302,7 @@ export default function App() {
                       <div className="text-sm">
                         <div className="font-medium text-slate-100 flex items-center gap-2">
                           {e.date}
+                          {e.dayType && <span className="text-xs text-amber-300">{tr("daytype_" + e.dayType)}</span>}
                           {c.holiday && <span className="text-xs bg-orange-950 text-orange-300 px-1.5 py-0.5 rounded">{tr("badge_festiu")}</span>}
                         </div>
                         <div className="text-slate-400 text-xs mt-0.5">
@@ -1103,7 +1358,8 @@ export default function App() {
                       }`}
                     >
                       <span className={holiday ? "text-orange-300" : "text-slate-200"}>{day}</span>
-                      {c && (
+                      {entry && entry.dayType && <span className="text-[10px] leading-none font-medium text-amber-300">{tr("ab_" + entry.dayType)}</span>}
+                      {c && !entry.dayType && (
                         <span className="text-[10px] leading-none font-medium flex items-center gap-0.5">
                           <span className="text-blue-400">{fmtHoursCompact(c.normalHours)}</span>
                           {c.extraHours > 0 && <span className="text-green-400">+{fmtHoursCompact(c.extraHours)}</span>}
@@ -1114,7 +1370,7 @@ export default function App() {
                 })}
               </div>
               <div className="flex gap-3 mt-3 text-xs text-slate-500">
-                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-950/60 border border-orange-900 inline-block" /> {tr("badge_festiu")}</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-orange-950/60 border border-orange-900 inline-block" /> {tr("legend_festiu")}</span>
                 <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-950 border border-emerald-800 inline-block" /> {tr("legend_parada")}</span>
                 <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-purple-950 border border-purple-800 inline-block" /> {tr("legend_parada_festiu")}</span>
                 <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-400 inline-block" /> {tr("legend_base")}</span>
@@ -1138,7 +1394,8 @@ export default function App() {
                     <div>{tr("day_parada")} <span className="text-slate-100">{selectedComputed.paradaMode === "none" ? tr("parada_none") : selectedComputed.paradaMode === "normal" ? tr("parada_normal") : tr("parada_festiu")} ({fmt(selectedComputed.paradaAmount)} €)</span></div>
                     {selectedComputed.nightH > 0 && <div>{tr("nocturn_label")}: <span className="text-slate-100">{fmt(selectedComputed.nightH)} h ({fmt(selectedComputed.nocturnAmount)} €)</span></div>}
                     {selectedEntry.ot && <div>OT: <span className="text-slate-100">{selectedEntry.ot}</span></div>}
-                    {selectedComputed.ticketsAmount > 0 && <div>{tr("tickets_title")}: <span className="text-slate-100">{selectedEntry.ticketConcept} {fmt(selectedComputed.ticketsAmount)} € {selectedEntry.ticketDesc}</span></div>}
+                    {(selectedEntry.tickets || []).map((tk, i) => <div key={i}>{tr("tickets_title")}: <span className="text-slate-100">{tk.concept} {fmt(Number(tk.amount) || 0)} € {tk.desc}</span></div>)}
+                    {selectedEntry.dayType && <div>{tr("daytype_title")}: <span className="text-amber-300">{tr("daytype_" + selectedEntry.dayType)}</span></div>}
                     <div>{tr("day_hours")} <span className="text-slate-100">{fmt(selectedComputed.normalHours)}h / {fmt(selectedComputed.extraHours)}h</span></div>
                     <div className="pt-1 font-medium text-[#e21a4c]">{tr("day_total_extra")} {fmt(selectedComputed.totalExtra)} €</div>
                     {selectedEntry.notes && <div className="text-slate-400 italic pt-1">{selectedEntry.notes}</div>}
@@ -1231,11 +1488,7 @@ export default function App() {
                 <div className="text-xs text-slate-500">{tr("nocturn_label")} ({fmt(monthSummary.nocturnHours)} h)</div>
                 <div className="text-lg font-semibold text-slate-100">{fmt(monthSummary.nocturnAmount)} €</div>
               </div>
-              <div className="bg-slate-900 rounded-lg border border-slate-800 p-3 col-span-2">
-                <div className="text-xs text-slate-500">{tr("tickets_title")}</div>
-                <div className="text-lg font-semibold text-slate-100">{fmt(monthSummary.ticketsAmount)} €</div>
-              </div>
-            </div>
+                           </div>
 
             <div className={cardCls}>
               <h3 className="font-semibold text-slate-100 mb-2 flex items-center gap-2">
@@ -1310,11 +1563,7 @@ export default function App() {
                       <div className="text-xs text-slate-500">{tr("nocturn_label")} ({fmt(rangeSummary.nocturnHours)} h)</div>
                       <div className="text-slate-100 font-medium">{fmt(rangeSummary.nocturnAmount)} €</div>
                     </div>
-                    <div className="bg-slate-800 rounded-lg p-2.5 col-span-2">
-                      <div className="text-xs text-slate-500">{tr("tickets_title")}</div>
-                      <div className="text-slate-100 font-medium">{fmt(rangeSummary.ticketsAmount)} €</div>
-                    </div>
-                  </div>
+                                       </div>
 
                   <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
                     <div>
@@ -1333,6 +1582,19 @@ export default function App() {
               )}
             </div>
 
+            <details className={cardCls}>
+              <summary className="cursor-pointer text-sm font-semibold text-slate-100">{tr("tickets_title")} ({rangeTickets.length} · {fmt(rangeTickets.reduce((a, tk) => a + (Number(tk.amount) || 0), 0))} €)</summary>
+              <div className="mt-2 space-y-1.5">
+                {rangeTickets.length === 0 ? <p className="text-xs text-slate-500">{tr("no_tickets")}</p> : rangeTickets.map((tk, i) => (
+                  <div key={i} className="bg-slate-800 rounded-lg px-3 py-2 text-xs text-slate-300 flex justify-between gap-2">
+                    <span>{tk.date} · {tk.concept}{tk.desc ? ` — ${tk.desc}` : ""}</span>
+                    <span className="text-slate-100 shrink-0">{fmt(Number(tk.amount) || 0)} €</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-500 mt-2">{tr("tickets_note")}</p>
+            </details>
+
             <button onClick={exportExcel} className="w-full bg-[#be0936] text-white rounded-lg py-2.5 text-sm font-medium flex items-center justify-center gap-2">
               <Download className="w-4 h-4" />
               {tr("export_button")}
@@ -1343,6 +1605,12 @@ export default function App() {
               {tr("backup_button")}
             </button>
             <p className="text-xs text-slate-500 text-center px-4">{tr("backup_note")}</p>
+            <label className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg py-2.5 text-sm font-medium flex items-center justify-center gap-2 cursor-pointer">
+              <Upload className="w-4 h-4" />
+              {tr("import_button")}
+              <input type="file" accept=".xlsx" className="hidden" onChange={(e) => { importBackup(e.target.files[0]); e.target.value = ""; }} />
+            </label>
+            <p className="text-xs text-slate-500 text-center px-4">{importMsg || tr("import_note")}</p>
 
             <div>
               <h3 className="text-sm font-semibold text-slate-500 mb-2 px-1">{tr("month_entries_title", monthLabel(month, lang))}</h3>
@@ -1364,6 +1632,29 @@ export default function App() {
 
         {tab === "config" && (
           <div className="space-y-4">
+            <section className={cardCls}>
+              <h2 className="font-semibold text-slate-100 mb-1 flex items-center gap-2">
+                <ListChecks className="w-4 h-4 text-[#e21a4c]" /> {tr("ot_title")}
+              </h2>
+              <p className="text-xs text-slate-500 mb-3">{tr("ot_note")}</p>
+              <div className="flex gap-2 mb-2">
+                <input value={otInput} onChange={(e) => setOtInput(e.target.value)} placeholder={tr("ot_placeholder")} className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-sm text-slate-100" />
+                <button onClick={addOT} className="bg-[#be0936] text-white rounded-lg px-3"><Plus className="w-4 h-4" /></button>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {ots.map((o) => (
+                  <span key={o} className="flex items-center gap-1 bg-slate-800 border border-slate-700 text-slate-200 text-xs px-2 py-1 rounded-full">
+                    {o}
+                    <button onClick={() => deleteOT(o)}><X className="w-3 h-3" /></button>
+                  </span>
+                ))}
+              </div>
+            </section>
+
+            <button onClick={undoConfig} disabled={!undoStack.length} className="w-full bg-slate-800 border border-slate-700 text-slate-200 rounded-lg py-2 text-sm flex items-center justify-center gap-2 disabled:opacity-40">
+              <RotateCcw className="w-4 h-4" /> {tr("undo_btn")} ({undoStack.length})
+            </button>
+
             <section className={cardCls}>
               <h2 className="font-semibold text-slate-100 mb-1 flex items-center gap-2">
                 <History className="w-4 h-4 text-[#e21a4c]" /> {tr("price_history_title")}
